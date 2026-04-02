@@ -16,10 +16,23 @@ import { z } from "zod";
 
 import type { PropertyDetail, PropertyListing, UserSummary } from "@/types";
 
+import { authValidationMessage } from "./lib/auth-zod-messages";
+import { bootstrapDefaultAdminIfEmpty } from "./lib/bootstrap-default-admin";
 import { closeExpiredAuctions } from "./lib/close-expired-auctions";
+import { logger } from "./lib/logger";
 import { prisma } from "./lib/prisma";
 
 dotenv.config();
+
+function parseAllowedOrigins(): string[] {
+  const raw = process.env.CLIENT_URL ?? "http://localhost:3000";
+  return raw
+    .split(",")
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+}
+
+const ALLOWED_ORIGINS = parseAllowedOrigins();
 
 class HttpError extends Error {
   readonly statusCode: number;
@@ -48,21 +61,54 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: process.env.CLIENT_URL ?? "http://localhost:3000",
+    origin: ALLOWED_ORIGINS.length === 1 ? ALLOWED_ORIGINS[0] : ALLOWED_ORIGINS,
     credentials: true,
   },
 });
 
 const PORT = Number(process.env.PORT ?? 4000);
-const CLIENT_URL = process.env.CLIENT_URL ?? "http://localhost:3000";
 /** Base URL for publicly reachable files (uploads). No trailing slash. */
 const PUBLIC_URL = (process.env.PUBLIC_URL ?? `http://localhost:${PORT}`).replace(/\/$/, "");
 const upload = multer({ storage: multer.memoryStorage() });
 
-app.use(cors({ origin: CLIENT_URL, credentials: true }));
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+      logger.warn("cors_request_blocked", { origin, allowedOrigins: ALLOWED_ORIGINS });
+      callback(null, false);
+    },
+    credentials: true,
+  }),
+);
 app.use(express.json({ limit: "10mb" }));
 app.use(cookieParser());
+app.use((req, res, next) => {
+  const started = Date.now();
+  res.on("finish", () => {
+    logger.info("http_request", {
+      method: req.method,
+      path: req.originalUrl.split("?")[0],
+      status: res.statusCode,
+      durationMs: Date.now() - started,
+    });
+  });
+  next();
+});
 app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
+
+app.get("/api/health", async (_req, res) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    res.json({ ok: true, database: "connected" });
+  } catch (error) {
+    logger.error("health_check_database_failed", error);
+    res.status(503).json({ ok: false, error: "Database unavailable" });
+  }
+});
 
 io.on("connection", (socket) => {
   socket.on("join:property", (propertyId: string) => socket.join(`property:${propertyId}`));
@@ -149,7 +195,10 @@ function requireAuth(req: express.Request, res: express.Response, next: express.
     const payload = jwt.verify(token, JWT_SECRET) as RequestUser;
     (req as express.Request & { user?: RequestUser }).user = payload;
     next();
-  } catch {
+  } catch (error) {
+    logger.debug("auth_invalid_token", {
+      reason: error instanceof Error ? error.message : String(error),
+    });
     res.status(401).json({ error: "Invalid token" });
   }
 }
@@ -194,7 +243,7 @@ async function requireAdmin(req: express.Request, res: express.Response, next: e
     }
     next();
   } catch (error) {
-    console.error("requireAdmin failed", error);
+    logger.error("require_admin_failed", error);
     res.status(500).json({ error: "Internal server error" });
   }
 }
@@ -236,7 +285,8 @@ app.post("/api/auth/register", async (req, res) => {
   try {
     const parsed = registerSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: "Invalid registration payload" });
+      logger.warn("auth_register_validation_failed", { issues: parsed.error.flatten() });
+      res.status(400).json({ error: authValidationMessage(parsed.error) });
       return;
     }
 
@@ -256,9 +306,14 @@ app.post("/api/auth/register", async (req, res) => {
     });
 
     const safeUser = sanitizeUser(user);
+    logger.info("auth_register_success", { userId: user.id, email: user.email });
     res.json({ user: safeUser, token: signToken(safeUser) });
   } catch (error) {
-    console.error("POST /api/auth/register failed", error);
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      res.status(409).json({ error: "An account with that email already exists." });
+      return;
+    }
+    logger.error("auth_register_exception", error);
     res.status(500).json({ error: "Registration failed" });
   }
 });
@@ -267,26 +322,31 @@ app.post("/api/auth/login", async (req, res) => {
   try {
     const parsed = authSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: "Invalid login payload" });
+      logger.warn("auth_login_validation_failed", { issues: parsed.error.flatten() });
+      res.status(400).json({ error: authValidationMessage(parsed.error) });
       return;
     }
 
-    const user = await prisma.user.findUnique({ where: { email: parsed.data.email.toLowerCase() } });
+    const emailLower = parsed.data.email.toLowerCase();
+    const user = await prisma.user.findUnique({ where: { email: emailLower } });
     if (!user) {
+      logger.warn("auth_login_failed_no_user", { email: emailLower });
       res.status(401).json({ error: "Invalid credentials" });
       return;
     }
 
     const valid = await bcrypt.compare(parsed.data.password, user.passwordHash);
     if (!valid) {
+      logger.warn("auth_login_failed_bad_password", { email: emailLower, userId: user.id });
       res.status(401).json({ error: "Invalid credentials" });
       return;
     }
 
     const safeUser = sanitizeUser(user);
+    logger.info("auth_login_success", { userId: user.id, email: user.email, role: user.role });
     res.json({ user: safeUser, token: signToken(safeUser) });
   } catch (error) {
-    console.error("POST /api/auth/login failed", error);
+    logger.error("auth_login_exception", error);
     res.status(500).json({ error: "Login failed" });
   }
 });
@@ -326,7 +386,7 @@ app.patch("/api/me", requireAuth, async (req, res) => {
     const safeUser = sanitizeUser(updated);
     res.json({ user: safeUser, token: signToken(safeUser) });
   } catch (error) {
-    console.error("PATCH /api/me failed", error);
+    logger.error("patch_me_failed", error);
     res.status(500).json({ error: "Could not update profile" });
   }
 });
@@ -354,7 +414,7 @@ app.post("/api/me/password", requireAuth, async (req, res) => {
 
     res.json({ success: true });
   } catch (error) {
-    console.error("POST /api/me/password failed", error);
+    logger.error("post_me_password_failed", error);
     res.status(500).json({ error: "Could not change password" });
   }
 });
@@ -363,7 +423,7 @@ app.get("/api/properties", async (req, res) => {
   try {
     await closeExpiredAuctions(prisma, io);
   } catch (error) {
-    console.error("closeExpiredAuctions (list)", error);
+    logger.error("close_expired_auctions_list_failed", error);
   }
 
   const search = typeof req.query.search === "string" ? req.query.search : undefined;
@@ -475,7 +535,7 @@ app.get("/api/properties/:id", async (req, res) => {
   try {
     await closeExpiredAuctions(prisma, io);
   } catch (error) {
-    console.error("closeExpiredAuctions (detail)", error);
+    logger.error("close_expired_auctions_detail_failed", error);
   }
 
   const userId = tryUserIdFromAuthHeader(req);
@@ -634,7 +694,7 @@ app.post("/api/properties/:id/bids", requireAuth, async (req, res) => {
       res.status(error.statusCode).json({ error: error.message });
       return;
     }
-    console.error("POST /api/properties/:id/bids failed", error);
+    logger.error("post_property_bid_failed", error);
     res.status(500).json({ error: "Unable to place bid" });
   }
 });
@@ -679,7 +739,7 @@ app.get("/api/me/favorites", requireAuth, async (req, res) => {
 
     res.json(favorites.map((row) => toListing(row.property)));
   } catch (error) {
-    console.error("GET /api/me/favorites failed", error);
+    logger.error("get_me_favorites_failed", error);
     res.status(500).json({ error: "Could not load favorites" });
   }
 });
@@ -693,7 +753,7 @@ app.get("/api/me/favorites/ids", requireAuth, async (req, res) => {
     });
     res.json({ ids: rows.map((row) => row.propertyId) });
   } catch (error) {
-    console.error("GET /api/me/favorites/ids failed", error);
+    logger.error("get_me_favorites_ids_failed", error);
     res.status(500).json({ error: "Could not load favorites" });
   }
 });
@@ -717,7 +777,7 @@ app.post("/api/me/favorites/:propertyId", requireAuth, async (req, res) => {
 
     res.status(201).json({ success: true });
   } catch (error) {
-    console.error("POST /api/me/favorites/:propertyId failed", error);
+    logger.error("post_me_favorite_failed", error);
     res.status(500).json({ error: "Could not save favorite" });
   }
 });
@@ -730,7 +790,7 @@ app.delete("/api/me/favorites/:propertyId", requireAuth, async (req, res) => {
     });
     res.json({ success: true });
   } catch (error) {
-    console.error("DELETE /api/me/favorites/:propertyId failed", error);
+    logger.error("delete_me_favorite_failed", error);
     res.status(500).json({ error: "Could not remove favorite" });
   }
 });
@@ -876,7 +936,7 @@ app.post("/api/admin/properties/:id/close-auction", requireAuth, requireAdmin, a
 
     res.json({ success: true });
   } catch (error) {
-    console.error("POST /api/admin/properties/:id/close-auction failed", error);
+    logger.error("post_admin_close_auction_failed", error);
     res.status(500).json({ error: "Could not close auction" });
   }
 });
@@ -906,15 +966,23 @@ app.post("/api/admin/upload", requireAuth, requireAdmin, upload.array("files"), 
 const AUCTION_CLOSE_INTERVAL_MS = 60_000;
 
 server.listen(PORT, () => {
-  console.log(`Backend listening on http://localhost:${PORT}`);
+  logger.info("server_listening", {
+    port: PORT,
+    allowedOrigins: ALLOWED_ORIGINS,
+    nodeEnv: process.env.NODE_ENV ?? "development",
+  });
+
+  void bootstrapDefaultAdminIfEmpty(prisma).catch((error) => {
+    logger.error("bootstrap_default_admin_failed", error);
+  });
 
   void closeExpiredAuctions(prisma, io).catch((error) => {
-    console.error("closeExpiredAuctions (startup)", error);
+    logger.error("close_expired_auctions_startup_failed", error);
   });
 
   setInterval(() => {
     void closeExpiredAuctions(prisma, io).catch((error) => {
-      console.error("closeExpiredAuctions (interval)", error);
+      logger.error("close_expired_auctions_interval_failed", error);
     });
   }, AUCTION_CLOSE_INTERVAL_MS);
 });
