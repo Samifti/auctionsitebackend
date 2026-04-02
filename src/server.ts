@@ -6,7 +6,7 @@ import { AuctionStatus, Prisma, Role } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import cookieParser from "cookie-parser";
 import cors from "cors";
-import { addMinutes, format, subDays } from "date-fns";
+import { addMinutes } from "date-fns";
 import dotenv from "dotenv";
 import express from "express";
 import jwt from "jsonwebtoken";
@@ -18,6 +18,7 @@ import type { PropertyDetail, PropertyListing, UserSummary } from "@/types";
 
 import { authValidationMessage } from "./lib/auth-zod-messages";
 import { bootstrapDefaultAdminIfEmpty } from "./lib/bootstrap-default-admin";
+import { getBidsByDayWindowCounts } from "./lib/bids-by-day-windows";
 import { closeExpiredAuctions } from "./lib/close-expired-auctions";
 import { logger } from "./lib/logger";
 import { prisma } from "./lib/prisma";
@@ -225,27 +226,17 @@ function parseQueryInt(value: unknown, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
-async function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
+function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
   const user = (req as express.Request & { user?: RequestUser }).user;
   if (!user) {
     res.status(401).json({ error: "Unauthorized" });
     return;
   }
-
-  try {
-    const dbUser = await prisma.user.findUnique({
-      where: { id: user.id },
-      select: { role: true },
-    });
-    if (!dbUser || dbUser.role !== Role.ADMIN) {
-      res.status(403).json({ error: "Forbidden" });
-      return;
-    }
-    next();
-  } catch (error) {
-    logger.error("require_admin_failed", error);
-    res.status(500).json({ error: "Internal server error" });
+  if (user.role !== Role.ADMIN) {
+    res.status(403).json({ error: "Forbidden" });
+    return;
   }
+  next();
 }
 
 function toListing(property: {
@@ -420,12 +411,6 @@ app.post("/api/me/password", requireAuth, async (req, res) => {
 });
 
 app.get("/api/properties", async (req, res) => {
-  try {
-    await closeExpiredAuctions(prisma, io);
-  } catch (error) {
-    logger.error("close_expired_auctions_list_failed", error);
-  }
-
   const search = typeof req.query.search === "string" ? req.query.search : undefined;
   const city = typeof req.query.city === "string" && req.query.city.length > 0 ? req.query.city : undefined;
   const sort = typeof req.query.sort === "string" ? req.query.sort : "end_asc";
@@ -532,12 +517,6 @@ app.get("/api/properties", async (req, res) => {
 });
 
 app.get("/api/properties/:id", async (req, res) => {
-  try {
-    await closeExpiredAuctions(prisma, io);
-  } catch (error) {
-    logger.error("close_expired_auctions_detail_failed", error);
-  }
-
   const userId = tryUserIdFromAuthHeader(req);
 
   const property = await prisma.property.findUnique({
@@ -796,42 +775,40 @@ app.delete("/api/me/favorites/:propertyId", requireAuth, async (req, res) => {
 });
 
 app.get("/api/admin/analytics", requireAuth, requireAdmin, async (_req, res) => {
-  const [totalProperties, activeAuctions, totalBids, totalValue, topProperties, recentBids] =
-    await Promise.all([
-      prisma.property.count(),
-      prisma.property.count({ where: { status: AuctionStatus.ACTIVE } }),
-      prisma.bid.count(),
-      prisma.property.aggregate({ _sum: { currentPrice: true } }),
-      prisma.property.findMany({
-        take: 5,
-        orderBy: { bidCount: "desc" },
-        select: { title: true, bidCount: true },
-      }),
-      prisma.bid.findMany({
-        take: 8,
-        orderBy: { createdAt: "desc" },
-        include: {
-          user: { select: { name: true } },
-          property: { select: { title: true } },
-        },
-      }),
-    ]);
-
-  const statuses = await prisma.property.groupBy({
-    by: ["status"],
-    _count: { _all: true },
-  });
-
   const bidsByDayAnchor = new Date();
-  const bidsByDay = await Promise.all(
-    Array.from({ length: 7 }, (_, index) => {
-      const day = subDays(bidsByDayAnchor, 6 - index);
-      const nextDay = subDays(bidsByDayAnchor, 5 - index);
-      return prisma.bid.count({
-        where: { createdAt: { gte: day, lt: nextDay } },
-      }).then((bids) => ({ day: format(day, "EEE"), bids }));
+  const [
+    totalProperties,
+    activeAuctions,
+    totalBids,
+    totalValue,
+    topProperties,
+    recentBids,
+    statuses,
+    bidsByDay,
+  ] = await Promise.all([
+    prisma.property.count(),
+    prisma.property.count({ where: { status: AuctionStatus.ACTIVE } }),
+    prisma.bid.count(),
+    prisma.property.aggregate({ _sum: { currentPrice: true } }),
+    prisma.property.findMany({
+      take: 5,
+      orderBy: { bidCount: "desc" },
+      select: { title: true, bidCount: true },
     }),
-  );
+    prisma.bid.findMany({
+      take: 8,
+      orderBy: { createdAt: "desc" },
+      include: {
+        user: { select: { name: true } },
+        property: { select: { title: true } },
+      },
+    }),
+    prisma.property.groupBy({
+      by: ["status"],
+      _count: { _all: true },
+    }),
+    getBidsByDayWindowCounts(prisma, bidsByDayAnchor),
+  ]);
 
   res.json({
     totals: {
