@@ -1,9 +1,9 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.registerHealthRoutes = registerHealthRoutes;
-const api_response_1 = require("@/lib/api-response");
-const logger_1 = require("@/lib/logger");
-const prisma_1 = require("@/lib/prisma");
+const api_response_1 = require("../lib/api-response");
+const logger_1 = require("../lib/logger");
+const prisma_1 = require("../lib/prisma");
 function registerHealthRoutes(app) {
     app.get("/api/health", async (_req, res) => {
         try {

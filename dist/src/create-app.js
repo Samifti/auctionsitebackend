@@ -10,16 +10,16 @@ const cors_1 = __importDefault(require("cors"));
 const express_1 = __importDefault(require("express"));
 const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 const helmet_1 = __importDefault(require("helmet"));
-const jwt_tokens_1 = require("@/lib/jwt-tokens");
-const logger_1 = require("@/lib/logger");
-const prisma_1 = require("@/lib/prisma");
-const error_handler_1 = require("@/middleware/error-handler");
-const request_id_1 = require("@/middleware/request-id");
-const admin_1 = require("@/routes/admin");
-const auth_1 = require("@/routes/auth");
-const health_1 = require("@/routes/health");
-const me_1 = require("@/routes/me");
-const properties_1 = require("@/routes/properties");
+const jwt_tokens_1 = require("./lib/jwt-tokens");
+const logger_1 = require("./lib/logger");
+const prisma_1 = require("./lib/prisma");
+const error_handler_1 = require("./middleware/error-handler");
+const request_id_1 = require("./middleware/request-id");
+const admin_1 = require("./routes/admin");
+const auth_1 = require("./routes/auth");
+const health_1 = require("./routes/health");
+const me_1 = require("./routes/me");
+const properties_1 = require("./routes/properties");
 function parseAllowedOrigins() {
     const raw = process.env.CLIENT_URL ?? "http://localhost:3000";
     return raw
