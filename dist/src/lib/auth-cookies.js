@@ -4,7 +4,7 @@ exports.REFRESH_TOKEN_COOKIE = exports.ACCESS_TOKEN_COOKIE = void 0;
 exports.setAuthCookies = setAuthCookies;
 exports.clearAuthCookies = clearAuthCookies;
 exports.getRefreshTokenFromRequest = getRefreshTokenFromRequest;
-const jwt_tokens_1 = require("@/lib/jwt-tokens");
+const jwt_tokens_1 = require("../lib/jwt-tokens");
 exports.ACCESS_TOKEN_COOKIE = "panic_auction_at";
 exports.REFRESH_TOKEN_COOKIE = "panic_auction_rt";
 function baseCookieOptions() {

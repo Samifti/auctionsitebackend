@@ -3,9 +3,9 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.createRequireAuth = createRequireAuth;
 exports.createTryUserIdFromAuth = createTryUserIdFromAuth;
 exports.createRequireAdmin = createRequireAdmin;
-const api_response_1 = require("@/lib/api-response");
-const logger_1 = require("@/lib/logger");
-const jwt_tokens_1 = require("@/lib/jwt-tokens");
+const api_response_1 = require("../lib/api-response");
+const logger_1 = require("../lib/logger");
+const jwt_tokens_1 = require("../lib/jwt-tokens");
 function createRequireAuth(jwtSecret) {
     return function requireAuth(req, res, next) {
         const header = req.headers.authorization;

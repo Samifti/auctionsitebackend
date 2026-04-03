@@ -4,10 +4,9 @@ WORKDIR /app
 COPY package.json ./
 RUN npm install
 COPY prisma ./prisma
-RUN npx prisma generate
 COPY src ./src
 COPY tsconfig.json ./
-RUN npx tsc -p tsconfig.json
+RUN npm run build
 
 FROM node:20-slim AS runner
 RUN apt-get update -y && apt-get install -y openssl ca-certificates && rm -rf /var/lib/apt/lists/*

@@ -2,8 +2,8 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.notFoundHandler = notFoundHandler;
 exports.errorHandler = errorHandler;
-const api_response_1 = require("@/lib/api-response");
-const logger_1 = require("@/lib/logger");
+const api_response_1 = require("../lib/api-response");
+const logger_1 = require("../lib/logger");
 function notFoundHandler(req, res) {
     res.status(404).json((0, api_response_1.fail)("Not found"));
 }
