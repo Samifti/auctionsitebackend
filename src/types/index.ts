@@ -7,6 +7,7 @@ export interface UserSummary {
   name: string;
   email: string;
   role: UserRole;
+  emailVerified: boolean;
 }
 
 export interface BidActivity {
@@ -85,4 +86,6 @@ export interface DashboardAnalytics {
 export interface AuthResponse {
   user: UserSummary;
   token: string;
+  /** Omitted when tokens are only set via httpOnly cookies. */
+  refreshToken?: string;
 }

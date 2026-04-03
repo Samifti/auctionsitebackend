@@ -141,7 +141,7 @@ export async function runAdminChecks(context: SmokeContext) {
   const upload = await apiRequest<{ files: string[] }>("/api/admin/upload", {
     method: "POST",
     token: context.adminToken,
-    formData: createTextUploadForm("smoke-upload.txt", "estatebid smoke upload"),
+    formData: createTextUploadForm("smoke-upload.txt", "panic auction smoke upload"),
   });
   assert(upload.ok, "Admin upload should succeed");
   assert(upload.data.files.length > 0, "Admin upload should return at least one file URL");
