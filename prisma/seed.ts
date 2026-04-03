@@ -1,5 +1,5 @@
 import bcrypt from "bcryptjs";
-import { PrismaClient, AuctionStatus, Role } from "@prisma/client";
+import { PrismaClient, AuctionStatus, BidStatus, Role } from "@prisma/client";
 
 import { seedImageTemplates, seedProperties } from "./seed-properties";
 
@@ -32,6 +32,7 @@ async function main() {
       email: "admin@auction.local",
       passwordHash,
       role: Role.ADMIN,
+      emailVerified: true,
     },
   });
 
@@ -43,6 +44,7 @@ async function main() {
           email: `${name}@auction.local`,
           passwordHash,
           role: Role.CUSTOMER,
+          emailVerified: true,
         },
       }),
     ),
@@ -72,7 +74,7 @@ async function main() {
             amount,
             userId: customers[bidIndex % customers.length].id,
             propertyId: created.id,
-            status: bidIndex === bidAmounts.length - 1 ? "ACTIVE" : "OUTBID",
+            status: bidIndex === bidAmounts.length - 1 ? BidStatus.ACTIVE : BidStatus.OUTBID,
           },
         });
       }
