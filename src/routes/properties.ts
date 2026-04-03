@@ -2,7 +2,7 @@ import { AuctionStatus, BidStatus, NotificationType, Prisma, Role } from "@prism
 import { addMinutes } from "date-fns";
 import type { Router } from "express";
 import express from "express";
-import rateLimit from "express-rate-limit";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import type { PrismaClient } from "@prisma/client";
 import type { Server } from "socket.io";
 
@@ -71,9 +71,9 @@ const bidPostLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: (req) => {
-    // Rate limit per user instead of per IP
+    // Per-user when authenticated, falls back to IP (IPv6-safe) for unauthenticated
     const user = (req as AuthedRequest).user;
-    return user?.id || req.ip || "unknown";
+    return user?.id ?? ipKeyGenerator(req.ip ?? "unknown");
   },
   message: {
     success: false,
