@@ -136,6 +136,7 @@ export function createAdminRouter(deps: AdminRouterDeps): Router {
         statusDistribution: statuses.map((status) => ({ status: status.status, count: status._count._all })),
         recentBids: recentBids.map((bid) => ({
           id: bid.id,
+          userId: bid.userId,
           amount: bid.amount,
           createdAt: bid.createdAt.toISOString(),
           propertyTitle: bid.property.title,

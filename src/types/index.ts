@@ -78,6 +78,7 @@ export interface DashboardAnalytics {
   statusDistribution: { status: AuctionStatus; count: number }[];
   recentBids: {
     id: string;
+    userId: string;
     amount: number;
     createdAt: string;
     propertyTitle: string;
