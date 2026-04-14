@@ -1,4 +1,4 @@
-import { AuctionStatus, NotificationType } from "@prisma/client";
+import { AuctionStatus, BidStatus, NotificationType } from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
 import type { Server } from "socket.io";
 
@@ -49,6 +49,13 @@ export async function closeExpiredAuctions(prisma: PrismaClient, io: Server): Pr
 
         if (updated.count === 0) {
           return null; // Property was already updated
+        }
+
+        if (topBid) {
+          await tx.bid.update({
+            where: { id: topBid.id },
+            data: { status: BidStatus.WON },
+          });
         }
 
         return { topBid, title: row.title };

@@ -54,9 +54,11 @@ export async function bootstrapDefaultAdminIfEmpty(prisma: PrismaClient): Promis
     data: {
       name: "Admin User",
       email,
+      phoneNumber: "+10000000000",
       passwordHash,
       role: Role.ADMIN,
       emailVerified: true,
+      phoneVerified: true,
     },
   });
 

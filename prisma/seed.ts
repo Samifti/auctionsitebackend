@@ -30,21 +30,25 @@ async function main() {
     data: {
       name: "Admin User",
       email: "admin@auction.local",
+      phoneNumber: "+10000000000",
       passwordHash,
       role: Role.ADMIN,
       emailVerified: true,
+      phoneVerified: true,
     },
   });
 
   const customers = await Promise.all(
-    ["fatima", "omar", "layla"].map((name) =>
+    ["fatima", "omar", "layla"].map((name, index) =>
       prisma.user.create({
         data: {
           name: `${name[0].toUpperCase()}${name.slice(1)}`,
           email: `${name}@auction.local`,
+          phoneNumber: `+1000000000${index + 1}`,
           passwordHash,
           role: Role.CUSTOMER,
           emailVerified: true,
+          phoneVerified: true,
         },
       }),
     ),

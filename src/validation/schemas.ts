@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+const e164PhoneSchema = z
+  .string()
+  .trim()
+  .regex(/^\+[1-9]\d{7,14}$/, "Phone number must be in E.164 format (example: +14155552671)");
+
 export const authSchema = z.object({
   email: z.string().email(),
   password: z.string().min(8),
@@ -7,6 +12,7 @@ export const authSchema = z.object({
 
 export const registerSchema = authSchema.extend({
   name: z.string().min(2).max(80),
+  phoneNumber: e164PhoneSchema,
 });
 
 export const isoDateString = z.string().refine((value) => !Number.isNaN(new Date(value).getTime()), {
@@ -68,6 +74,14 @@ export const resetPasswordSchema = z.object({
 
 export const verifyEmailSchema = z.object({
   token: z.string().min(10),
+});
+
+export const sendPhoneOtpSchema = z.object({
+  phoneNumber: e164PhoneSchema,
+});
+
+export const verifyPhoneOtpSchema = z.object({
+  code: z.string().trim().regex(/^\d{4,10}$/, "Invalid verification code"),
 });
 
 export const refreshBodySchema = z.object({

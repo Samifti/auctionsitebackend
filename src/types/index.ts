@@ -6,8 +6,10 @@ export interface UserSummary {
   id: string;
   name: string;
   email: string;
+  phoneNumber: string;
   role: UserRole;
   emailVerified: boolean;
+  phoneVerified: boolean;
 }
 
 export interface BidActivity {
@@ -88,4 +90,55 @@ export interface AuthResponse {
   token: string;
   /** Omitted when tokens are only set via httpOnly cookies. */
   refreshToken?: string;
+}
+
+/**
+ * A single bid entry as returned by the admin bids list endpoint.
+ * Includes a snapshot of the bidder and the property being bid on.
+ */
+export interface AdminBidRecord {
+  id: string;
+  amount: number;
+  /** String representation of the `BidStatus` enum value (e.g. "ACTIVE", "WON", "OUTBID"). */
+  status: string;
+  createdAt: string;
+  user: {
+    id: string;
+    name: string;
+    email: string;
+    role: UserRole;
+    emailVerified: boolean;
+    createdAt: string;
+  };
+  property: {
+    id: string;
+    title: string;
+  };
+}
+
+/** Paginated wrapper for the admin bids list. */
+export interface PaginatedAdminBids {
+  items: AdminBidRecord[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
+/**
+ * Safe user profile returned to admins.
+ * Never includes `passwordHash` or token records.
+ */
+export interface AdminUserProfile {
+  id: string;
+  name: string;
+  email: string;
+  phoneNumber: string;
+  role: UserRole;
+  emailVerified: boolean;
+  phoneVerified: boolean;
+  createdAt: string;
+  updatedAt: string;
+  /** Total number of bids ever placed by this user across all properties. */
+  totalBids: number;
 }

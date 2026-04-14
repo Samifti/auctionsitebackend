@@ -87,166 +87,178 @@ export function createPropertiesRouter(deps: PropertiesRouterDeps): Router {
   const tryUserId = createTryUserIdFromAuth(deps.jwtSecret);
 
   router.get("/", async (req, res) => {
-    const search = typeof req.query.search === "string" ? req.query.search : undefined;
-    const city = typeof req.query.city === "string" && req.query.city.length > 0 ? req.query.city : undefined;
-    const sort = typeof req.query.sort === "string" ? req.query.sort : "end_asc";
-    const statusParam = typeof req.query.status === "string" ? req.query.status : undefined;
-    const minPrice = typeof req.query.minPrice === "string" && req.query.minPrice.length > 0 
-      ? Number(req.query.minPrice) : undefined;
-    const maxPrice = typeof req.query.maxPrice === "string" && req.query.maxPrice.length > 0 
-      ? Number(req.query.maxPrice) : undefined;
-    const page = Math.max(1, parseQueryInt(req.query.page, 1));
-    const pageSize = Math.min(50, Math.max(1, parseQueryInt(req.query.pageSize, 12)));
+    try {
+      const search = typeof req.query.search === "string" ? req.query.search : undefined;
+      const city = typeof req.query.city === "string" && req.query.city.length > 0 ? req.query.city : undefined;
+      const sort = typeof req.query.sort === "string" ? req.query.sort : "end_asc";
+      const statusParam = typeof req.query.status === "string" ? req.query.status : undefined;
+      const minPrice = typeof req.query.minPrice === "string" && req.query.minPrice.length > 0
+        ? Number(req.query.minPrice)
+        : undefined;
+      const maxPrice = typeof req.query.maxPrice === "string" && req.query.maxPrice.length > 0
+        ? Number(req.query.maxPrice)
+        : undefined;
+      const page = Math.max(1, parseQueryInt(req.query.page, 1));
+      const pageSize = Math.min(50, Math.max(1, parseQueryInt(req.query.pageSize, 12)));
 
-    const where: Prisma.PropertyWhereInput = {};
+                                                                                                              const where: Prisma.PropertyWhereInput = {};
 
-    if (search) {
-      where.OR = [
-        { title: { contains: search, mode: "insensitive" } },
-        { location: { contains: search, mode: "insensitive" } },
-        { city: { contains: search, mode: "insensitive" } },
-      ];
-    }
-
-    if (city) {
-      where.city = { contains: city, mode: "insensitive" };
-    }
-
-    if (statusParam) {
-      const parts = statusParam.split(",").map((s) => s.trim()) as AuctionStatus[];
-      const valid = parts.filter((s): s is AuctionStatus =>
-        ["UPCOMING", "ACTIVE", "ENDED", "SOLD"].includes(s),
-      );
-      if (valid.length > 0) {
-        where.status = { in: valid };
+      if (search) {
+        where.OR = [
+          { title: { contains: search, mode: "insensitive" } },
+          { location: { contains: search, mode: "insensitive" } },
+          { city: { contains: search, mode: "insensitive" } },
+        ];
       }
-    }
 
-    const priceFilter: Prisma.FloatFilter = {};
-    if (minPrice !== undefined && Number.isFinite(minPrice) && minPrice >= 0) {
-      priceFilter.gte = minPrice;
-    }
-    if (maxPrice !== undefined && Number.isFinite(maxPrice) && maxPrice >= 0) {
-      priceFilter.lte = maxPrice;
-    }
-    
-    // Validate price range
-    if (priceFilter.gte !== undefined && priceFilter.lte !== undefined && priceFilter.gte > priceFilter.lte) {
-      res.status(400).json(fail("Invalid price range: minimum price cannot be greater than maximum price"));
-      return;
-    }
-    if (Object.keys(priceFilter).length > 0) {
-      where.currentPrice = priceFilter;
-    }
+      if (city) {
+        where.city = { contains: city, mode: "insensitive" };
+      }
 
-    let orderBy: Prisma.PropertyOrderByWithRelationInput = { auctionEnd: "asc" };
-    switch (sort) {
-      case "end_desc":
-        orderBy = { auctionEnd: "desc" };
-        break;
-      case "price_asc":
-        orderBy = { currentPrice: "asc" };
-        break;
-      case "price_desc":
-        orderBy = { currentPrice: "desc" };
-        break;
-      case "new":
-        orderBy = { createdAt: "desc" };
-        break;
-      default:
-        orderBy = { auctionEnd: "asc" };
-    }
+      if (statusParam) {
+        const parts = statusParam.split(",").map((s) => s.trim()) as AuctionStatus[];
+        const valid = parts.filter((s): s is AuctionStatus =>
+          ["UPCOMING", "ACTIVE", "ENDED", "SOLD"].includes(s),
+        );
+        if (valid.length > 0) {
+          where.status = { in: valid };
+        }
+      }
 
-    const userId = tryUserId(req);
+      const priceFilter: Prisma.FloatFilter = {};
+      if (minPrice !== undefined && Number.isFinite(minPrice) && minPrice >= 0) {
+        priceFilter.gte = minPrice;
+      }
+      if (maxPrice !== undefined && Number.isFinite(maxPrice) && maxPrice >= 0) {
+        priceFilter.lte = maxPrice;
+      }
 
-    const [total, rows] = await Promise.all([
-      deps.prisma.property.count({ where }),
-      deps.prisma.property.findMany({
-        where,
-        orderBy,
-        skip: (page - 1) * pageSize,
-        take: pageSize,
-      }),
-    ]);
+      // Validate price range
+      if (priceFilter.gte !== undefined && priceFilter.lte !== undefined && priceFilter.gte > priceFilter.lte) {
+        res.status(400).json(fail("Invalid price range: minimum price cannot be greater than maximum price"));
+        return;
+      }
+      if (Object.keys(priceFilter).length > 0) {
+        where.currentPrice = priceFilter;
+      }
 
-    let favoriteSet = new Set<string>();
-    if (userId && rows.length > 0) {
-      const favs = await deps.prisma.favorite.findMany({
-        where: {
-          userId,
-          propertyId: { in: rows.map((r) => r.id) },
-        },
-        select: { propertyId: true },
+      let orderBy: Prisma.PropertyOrderByWithRelationInput = { auctionEnd: "asc" };
+      switch (sort) {
+        case "end_desc":
+          orderBy = { auctionEnd: "desc" };
+          break;
+        case "price_asc":
+          orderBy = { currentPrice: "asc" };
+          break;
+        case "price_desc":
+          orderBy = { currentPrice: "desc" };
+          break;
+        case "new":
+          orderBy = { createdAt: "desc" };
+          break;
+        default:
+          orderBy = { auctionEnd: "asc" };
+      }
+
+      const userId = tryUserId(req);
+
+      const [total, rows] = await Promise.all([
+        deps.prisma.property.count({ where }),
+        deps.prisma.property.findMany({
+          where,
+          orderBy,
+          skip: (page - 1) * pageSize,
+          take: pageSize,
+        }),
+      ]);
+
+      let favoriteSet = new Set<string>();
+      if (userId && rows.length > 0) {
+        const favs = await deps.prisma.favorite.findMany({
+          where: {
+            userId,
+            propertyId: { in: rows.map((r) => r.id) },
+          },
+          select: { propertyId: true },
+        });
+        favoriteSet = new Set(favs.map((f) => f.propertyId));
+      }
+
+      const items: PropertyListing[] = rows.map((property) => {
+        const listing = toListing(property);
+        if (userId) {
+          return { ...listing, isFavorite: favoriteSet.has(property.id) };
+        }
+        return listing;
       });
-      favoriteSet = new Set(favs.map((f) => f.propertyId));
+
+      const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+      res.json(ok({ items, total, page, pageSize, totalPages }));
+    } catch (error) {
+      logger.error("get_properties_failed", error);
+      res.status(500).json(fail("Could not load properties"));
     }
-
-    const items: PropertyListing[] = rows.map((property) => {
-      const listing = toListing(property);
-      if (userId) {
-        return { ...listing, isFavorite: favoriteSet.has(property.id) };
-      }
-      return listing;
-    });
-
-    const totalPages = Math.max(1, Math.ceil(total / pageSize));
-
-    res.json(ok({ items, total, page, pageSize, totalPages }));
   });
 
   router.get("/:id", async (req, res) => {
-    const userId = tryUserId(req);
+    try {
+      const userId = tryUserId(req);
 
-    const property = await deps.prisma.property.findUnique({
-      where: { id: req.params.id },
-      include: {
-        winner: { select: { id: true, name: true } },
-        bids: {
-          orderBy: { createdAt: "desc" },
-          include: { user: { select: { name: true } } },
-        },
-      },
-    });
-
-    if (!property) {
-      res.status(404).json(fail("Property not found"));
-      return;
-    }
-
-    let isFavorite: boolean | undefined;
-    if (userId) {
-      const fav = await deps.prisma.favorite.findUnique({
-        where: {
-          userId_propertyId: { userId, propertyId: property.id },
+      const property = await deps.prisma.property.findUnique({
+        where: { id: req.params.id },
+        include: {
+          winner: { select: { id: true, name: true } },
+          bids: {
+            orderBy: { createdAt: "desc" },
+            include: { user: { select: { name: true } } },
+          },
         },
       });
-      isFavorite = Boolean(fav);
+
+      if (!property) {
+        res.status(404).json(fail("Property not found"));
+        return;
+      }
+
+      let isFavorite: boolean | undefined;
+      if (userId) {
+        const fav = await deps.prisma.favorite.findUnique({
+          where: {
+            userId_propertyId: { userId, propertyId: property.id },
+          },
+        });
+        isFavorite = Boolean(fav);
+      }
+
+      const winner =
+        property.winner && (property.status === AuctionStatus.ENDED || property.status === AuctionStatus.SOLD)
+          ? {
+              userId: property.winner.id,
+              name: property.winner.name,
+              amount: property.currentPrice,
+            }
+          : null;
+
+      const base = toListing(property);
+      const result: PropertyDetail = {
+        ...base,
+        ...(userId !== undefined ? { isFavorite } : {}),
+        bids: property.bids.map((bid) => ({
+          id: bid.id,
+          amount: bid.amount,
+          bidderName: bid.user.name,
+          createdAt: bid.createdAt.toISOString(),
+          status: bid.status,
+        })),
+        winner,
+      };
+
+      res.json(ok(result));
+    } catch (error) {
+      logger.error("get_property_detail_failed", { propertyId: String(req.params.id), error });
+      res.status(500).json(fail("Could not load property"));
     }
-
-    const winner =
-      property.winner && (property.status === AuctionStatus.ENDED || property.status === AuctionStatus.SOLD)
-        ? {
-            userId: property.winner.id,
-            name: property.winner.name,
-            amount: property.currentPrice,
-          }
-        : null;
-
-    const base = toListing(property);
-    const result: PropertyDetail = {
-      ...base,
-      ...(userId !== undefined ? { isFavorite } : {}),
-      bids: property.bids.map((bid) => ({
-        id: bid.id,
-        amount: bid.amount,
-        bidderName: bid.user.name,
-        createdAt: bid.createdAt.toISOString(),
-        status: bid.status,
-      })),
-      winner,
-    };
-
-    res.json(ok(result));
   });
 
   router.post("/:id/bids", requireAuth, bidPostLimiter, async (req, res) => {
@@ -265,8 +277,8 @@ export function createPropertiesRouter(deps: PropertiesRouterDeps): Router {
     }
     (req as AuthedRequest).user = toUserSummary(dbUser);
     const authedUser = (req as AuthedRequest).user;
-    if (dbUser.role === Role.CUSTOMER && !dbUser.emailVerified) {
-      res.status(403).json(fail("Verify your email before placing bids."));
+    if (dbUser.role === Role.CUSTOMER && !dbUser.phoneVerified) {
+      res.status(403).json(fail("Verify your phone number before placing bids."));
       return;
     }
 
@@ -283,7 +295,7 @@ export function createPropertiesRouter(deps: PropertiesRouterDeps): Router {
         }
 
         const now = new Date();
-        if (now > property.auctionEnd) {
+        if (now >= property.auctionEnd) {
           throw new HttpError(400, "Auction has ended.");
         }
 

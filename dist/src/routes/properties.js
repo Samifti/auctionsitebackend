@@ -235,8 +235,8 @@ function createPropertiesRouter(deps) {
         }
         req.user = (0, user_mapper_1.toUserSummary)(dbUser);
         const authedUser = req.user;
-        if (dbUser.role === client_1.Role.CUSTOMER && !dbUser.emailVerified) {
-            res.status(403).json((0, api_response_1.fail)("Verify your email before placing bids."));
+        if (dbUser.role === client_1.Role.CUSTOMER && !dbUser.phoneVerified) {
+            res.status(403).json((0, api_response_1.fail)("Verify your phone number before placing bids."));
             return;
         }
         try {

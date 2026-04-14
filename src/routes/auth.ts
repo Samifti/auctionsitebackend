@@ -14,6 +14,7 @@ import { generateOpaqueToken, hashOpaqueToken } from "@/lib/crypto-token";
 import { sendEmail } from "@/lib/email";
 import { signAccessToken } from "@/lib/jwt-tokens";
 import { logger } from "@/lib/logger";
+import { checkPhoneVerificationCode, sendPhoneVerificationCode } from "@/lib/twilio-verify";
 import {
   consumeRefreshToken,
   createRefreshTokenRecord,
@@ -29,7 +30,9 @@ import {
   logoutBodySchema,
   refreshBodySchema,
   registerSchema,
+  sendPhoneOtpSchema,
   resetPasswordSchema,
+  verifyPhoneOtpSchema,
   verifyEmailSchema,
 } from "@/validation/schemas";
 
@@ -78,13 +81,23 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
         return;
       }
 
+      const existingPhone = await deps.prisma.user.findUnique({
+        where: { phoneNumber: parsed.data.phoneNumber },
+      });
+      if (existingPhone) {
+        res.status(409).json(fail("An account with that phone number already exists."));
+        return;
+      }
+
       const user = await deps.prisma.user.create({
         data: {
           name: parsed.data.name,
           email: parsed.data.email.toLowerCase(),
+          phoneNumber: parsed.data.phoneNumber,
           passwordHash: await bcrypt.hash(parsed.data.password, 10),
           role: Role.CUSTOMER,
           emailVerified: false,
+          phoneVerified: false,
         },
       });
 
@@ -111,11 +124,25 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
         text: `Verify your email: ${verifyUrl}`,
       }).catch((err) => logger.error("verify_email_send_failed", err));
 
+      await sendPhoneVerificationCode(user.phoneNumber).catch((err) => {
+        logger.error("verify_phone_send_failed", {
+          userId: user.id,
+          phoneSuffix: user.phoneNumber.slice(-4),
+          reason: err instanceof Error ? err.message : String(err),
+        });
+        throw err;
+      });
+
       logger.info("auth_register_success", { userId: user.id, email: redactEmail(user.email) });
       setAuthCookies(res, token, refresh.raw);
       res.json(ok({ user: safeUser, token }));
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+        const targets = Array.isArray(error.meta?.target) ? error.meta.target : [];
+        if (targets.includes("phoneNumber")) {
+          res.status(409).json(fail("An account with that phone number already exists."));
+          return;
+        }
         res.status(409).json(fail("An account with that email already exists."));
         return;
       }
@@ -320,6 +347,96 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
     } catch (error) {
       logger.error("verify_email_exception", error);
       res.status(500).json(fail("Verification failed"));
+    }
+  });
+
+  router.post("/verify-phone-otp", requireAuth, async (req, res) => {
+    try {
+      const parsed = verifyPhoneOtpSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json(fail("Invalid verification code"));
+        return;
+      }
+
+      const user = (req as AuthedRequest).user;
+      const dbUser = await deps.prisma.user.findUnique({ where: { id: user.id } });
+      if (!dbUser) {
+        res.status(404).json(fail("User not found"));
+        return;
+      }
+      if (dbUser.phoneVerified) {
+        res.json(ok({ verified: true, alreadyVerified: true }));
+        return;
+      }
+
+      const check = await checkPhoneVerificationCode(dbUser.phoneNumber, parsed.data.code);
+      if (!check.valid) {
+        res.status(400).json(fail("Invalid or expired OTP code"));
+        return;
+      }
+
+      const updated = await deps.prisma.user.update({
+        where: { id: user.id },
+        data: { phoneVerified: true },
+      });
+      const safeUser = toUserSummary(updated);
+      const token = signAccessToken(safeUser as UserSummary, deps.jwtSecret);
+      const refresh = await createRefreshTokenRecord(deps.prisma, updated.id);
+      setAuthCookies(res, token, refresh.raw);
+      res.json(ok({ verified: true, user: safeUser, token }));
+    } catch (error) {
+      logger.error("verify_phone_otp_exception", error);
+      res.status(500).json(fail("Phone verification failed"));
+    }
+  });
+
+  router.post("/resend-phone-otp", requireAuth, async (req, res) => {
+    try {
+      const user = (req as AuthedRequest).user;
+      const dbUser = await deps.prisma.user.findUnique({ where: { id: user.id } });
+      if (!dbUser) {
+        res.status(404).json(fail("User not found"));
+        return;
+      }
+      if (dbUser.phoneVerified) {
+        res.json(ok({ sent: false, reason: "already_verified" }));
+        return;
+      }
+
+      await sendPhoneVerificationCode(dbUser.phoneNumber);
+      res.json(ok({ sent: true }));
+    } catch (error) {
+      logger.error("resend_phone_otp_exception", error);
+      res.status(500).json(fail("Could not resend phone OTP"));
+    }
+  });
+
+  router.post("/send-phone-otp", requireAuth, async (req, res) => {
+    try {
+      const parsed = sendPhoneOtpSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json(fail("Invalid phone number"));
+        return;
+      }
+      const user = (req as AuthedRequest).user;
+      const dbUser = await deps.prisma.user.findUnique({ where: { id: user.id } });
+      if (!dbUser) {
+        res.status(404).json(fail("User not found"));
+        return;
+      }
+      if (dbUser.phoneNumber !== parsed.data.phoneNumber) {
+        res.status(400).json(fail("Phone number does not match your account"));
+        return;
+      }
+      if (dbUser.phoneVerified) {
+        res.json(ok({ sent: false, reason: "already_verified" }));
+        return;
+      }
+      await sendPhoneVerificationCode(dbUser.phoneNumber);
+      res.json(ok({ sent: true }));
+    } catch (error) {
+      logger.error("send_phone_otp_exception", error);
+      res.status(500).json(fail("Could not send phone OTP"));
     }
   });
 

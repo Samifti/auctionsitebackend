@@ -41,6 +41,7 @@ export function verifyAccessToken(token: string, secret: string): UserSummary {
     typeof user.id !== "string" ||
     typeof user.name !== "string" ||
     typeof user.email !== "string" ||
+    typeof user.phoneNumber !== "string" ||
     typeof user.role !== "string" ||
     !["ADMIN", "CUSTOMER"].includes(user.role)
   ) {
@@ -51,7 +52,9 @@ export function verifyAccessToken(token: string, secret: string): UserSummary {
     id: user.id,
     name: user.name,
     email: user.email,
+    phoneNumber: user.phoneNumber,
     role: user.role as "ADMIN" | "CUSTOMER",
     emailVerified: typeof user.emailVerified === "boolean" ? user.emailVerified : false,
+    phoneVerified: typeof user.phoneVerified === "boolean" ? user.phoneVerified : false,
   };
 }

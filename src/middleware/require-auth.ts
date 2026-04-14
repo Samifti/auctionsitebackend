@@ -19,13 +19,18 @@ export function createRequireAuth(jwtSecret: string) {
     }
 
     try {
-      const payload = verifyAccessToken(token, jwtSecret) as UserSummary & { emailVerified?: boolean };
+      const payload = verifyAccessToken(token, jwtSecret) as UserSummary & {
+        emailVerified?: boolean;
+        phoneVerified?: boolean;
+      };
       const user: UserSummary = {
         id: payload.id,
         name: payload.name,
         email: payload.email,
+        phoneNumber: payload.phoneNumber,
         role: payload.role,
         emailVerified: payload.emailVerified ?? false,
+        phoneVerified: payload.phoneVerified ?? false,
       };
       (req as AuthedRequest).user = user;
       next();

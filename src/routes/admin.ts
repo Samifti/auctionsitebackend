@@ -1,7 +1,7 @@
 import fs from "fs/promises";
 import path from "path";
 
-import { AuctionStatus, NotificationType } from "@prisma/client";
+import { AuctionStatus, BidStatus, NotificationType, Prisma } from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
 import type { Router } from "express";
 import express from "express";
@@ -15,7 +15,7 @@ import { logS3ConfigOnce, uploadBufferToS3, isS3Configured } from "@/lib/s3-uplo
 import { getBidsByDayWindowCounts } from "@/lib/bids-by-day-windows";
 import type { AuthedRequest } from "@/middleware/require-auth";
 import { createRequireAdmin } from "@/middleware/require-auth";
-import type { PropertyListing } from "@/types";
+import type { AdminBidRecord, AdminUserProfile, PaginatedAdminBids, PropertyListing } from "@/types";
 import { propertySchema } from "@/validation/schemas";
 
 const MAX_FILES = 10;
@@ -63,6 +63,18 @@ function toListing(property: {
     createdAt: property.createdAt.toISOString(),
     updatedAt: property.updatedAt.toISOString(),
   };
+}
+
+/**
+ * Parses an unknown query string value as an integer.
+ * Returns `fallback` when the value is absent, empty, or non-numeric.
+ */
+function parseQueryInt(value: unknown, fallback: number): number {
+  if (typeof value !== "string" || value.length === 0) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 export function createAdminRouter(deps: AdminRouterDeps): Router {
@@ -131,6 +143,121 @@ export function createAdminRouter(deps: AdminRouterDeps): Router {
         })),
       }),
     );
+  });
+
+  router.get("/admin/bids", requireAdmin, async (req, res) => {
+    try {
+      const page = Math.max(1, parseQueryInt(req.query.page, 1));
+      const pageSize = Math.min(100, Math.max(1, parseQueryInt(req.query.pageSize, 20)));
+      const skip = (page - 1) * pageSize;
+
+      /* ---------------------------------------------------------------------
+       * Fetch one page of bids and the total count in a single round-trip.
+       * The user snapshot (id, name, email, role, emailVerified, createdAt)
+       * and property snapshot (id, title) are included so the frontend can
+       * render the bidder profile link without a second request.
+       * --------------------------------------------------------------------- */
+      const [bids, total] = await Promise.all([
+        deps.prisma.bid.findMany({
+          skip,
+          take: pageSize,
+          orderBy: { createdAt: "desc" },
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                role: true,
+                emailVerified: true,
+                createdAt: true,
+              },
+            },
+            property: {
+              select: { id: true, title: true },
+            },
+          },
+        }),
+        deps.prisma.bid.count(),
+      ]);
+
+      const items: AdminBidRecord[] = bids.map((bid) => ({
+        id: bid.id,
+        amount: bid.amount,
+        status: bid.status,
+        createdAt: bid.createdAt.toISOString(),
+        user: {
+          ...bid.user,
+          createdAt: bid.user.createdAt.toISOString(),
+        },
+        property: bid.property,
+      }));
+
+      const result: PaginatedAdminBids = {
+        items,
+        total,
+        page,
+        pageSize,
+        totalPages: Math.ceil(total / pageSize),
+      };
+
+      res.json(ok(result));
+    } catch (error) {
+      logger.error("admin_get_bids_failed", { error });
+      res.status(500).json(fail("Failed to retrieve bids"));
+    }
+  });
+
+  router.get("/admin/users/:id", requireAdmin, async (req, res) => {
+    try {
+      const userId = String(req.params.id);
+
+      /* ---------------------------------------------------------------------
+       * Fetch the user and their total bid count in parallel.
+       * passwordHash is intentionally excluded from the select to ensure it
+       * is never serialised into the response, regardless of future changes.
+       * --------------------------------------------------------------------- */
+      const [user, totalBids] = await Promise.all([
+        deps.prisma.user.findUnique({
+          where: { id: userId },
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            phoneNumber: true,
+            role: true,
+            emailVerified: true,
+            phoneVerified: true,
+            createdAt: true,
+            updatedAt: true,
+          },
+        }),
+        deps.prisma.bid.count({ where: { userId } }),
+      ]);
+
+      if (!user) {
+        res.status(404).json(fail("User not found"));
+        return;
+      }
+
+      const profile: AdminUserProfile = {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        phoneNumber: user.phoneNumber,
+        role: user.role,
+        emailVerified: user.emailVerified,
+        phoneVerified: user.phoneVerified,
+        createdAt: user.createdAt.toISOString(),
+        updatedAt: user.updatedAt.toISOString(),
+        totalBids,
+      };
+
+      res.json(ok(profile));
+    } catch (error) {
+      logger.error("admin_get_user_profile_failed", { userId: req.params.id, error });
+      res.status(500).json(fail("Failed to retrieve user profile"));
+    }
   });
 
   router.post("/admin/properties", requireAdmin, async (req, res) => {
@@ -213,7 +340,7 @@ export function createAdminRouter(deps: AdminRouterDeps): Router {
       res.json(ok(toListing(property)));
     } catch (error) {
       const propertyId = String(req.params.id);
-      if (error instanceof Error && error.message.includes("Record to update not found")) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
         res.status(404).json(fail("Property not found"));
         return;
       }
@@ -237,7 +364,12 @@ export function createAdminRouter(deps: AdminRouterDeps): Router {
         return;
       }
 
-      if (property._count.bids > 0 && property.status === AuctionStatus.ACTIVE) {
+      const now = new Date();
+      if (
+        property._count.bids > 0 &&
+        property.status === AuctionStatus.ACTIVE &&
+        now < property.auctionEnd
+      ) {
         res.status(400).json(fail("Cannot delete active property with existing bids"));
         return;
       }
@@ -248,7 +380,7 @@ export function createAdminRouter(deps: AdminRouterDeps): Router {
       res.json(ok({ deleted: true }));
     } catch (error) {
       const propertyId = String(req.params.id);
-      if (error instanceof Error && error.message.includes("Record to delete does not exist")) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
         res.status(404).json(fail("Property not found"));
         return;
       }
@@ -270,18 +402,29 @@ export function createAdminRouter(deps: AdminRouterDeps): Router {
         return;
       }
 
-      const topBid = await deps.prisma.bid.findFirst({
-        where: { propertyId: property.id },
-        orderBy: { amount: "desc" },
-        include: { user: { select: { name: true } } },
-      });
+      const topBid = await deps.prisma.$transaction(async (tx) => {
+        const highestBid = await tx.bid.findFirst({
+          where: { propertyId: property.id },
+          orderBy: { amount: "desc" },
+          include: { user: { select: { name: true } } },
+        });
 
-      await deps.prisma.property.update({
-        where: { id: property.id },
-        data: {
-          status: AuctionStatus.ENDED,
-          winnerUserId: topBid?.userId ?? null,
-        },
+        await tx.property.update({
+          where: { id: property.id },
+          data: {
+            status: AuctionStatus.ENDED,
+            winnerUserId: highestBid?.userId ?? null,
+          },
+        });
+
+        if (highestBid) {
+          await tx.bid.update({
+            where: { id: highestBid.id },
+            data: { status: BidStatus.WON },
+          });
+        }
+
+        return highestBid;
       });
 
       if (topBid?.userId) {

@@ -71,6 +71,13 @@ export function createApp(options: CreateAppOptions): express.Express {
     legacyHeaders: false,
   });
 
+  const otpStrictLimiter = rateLimit({
+    windowMs: 10 * 60_000,
+    max: 8,
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+
   const uploadLimiter = rateLimit({
     windowMs: 60 * 60_000,
     max: 200,
@@ -116,6 +123,9 @@ export function createApp(options: CreateAppOptions): express.Express {
   app.use("/api/auth/forgot-password", authStrictLimiter);
   app.use("/api/auth/reset-password", authStrictLimiter);
   app.use("/api/auth/refresh", authStrictLimiter);
+  app.use("/api/auth/verify-phone-otp", otpStrictLimiter);
+  app.use("/api/auth/resend-phone-otp", otpStrictLimiter);
+  app.use("/api/auth/send-phone-otp", otpStrictLimiter);
 
   app.use("/api/admin/upload", uploadLimiter);
 

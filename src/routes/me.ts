@@ -200,34 +200,39 @@ export function createMeRouter(deps: MeRouterDeps): Router {
   });
 
   router.get("/me/bids", requireAuth, async (req, res) => {
-    const user = (req as AuthedRequest).user;
-    const bids = await deps.prisma.bid.findMany({
-      where: { userId: user.id },
-      orderBy: { createdAt: "desc" },
-      include: {
-        property: {
-          select: {
-            id: true,
-            title: true,
-            images: true,
-            currentPrice: true,
-            status: true,
+    try {
+      const user = (req as AuthedRequest).user;
+      const bids = await deps.prisma.bid.findMany({
+        where: { userId: user.id },
+        orderBy: { createdAt: "desc" },
+        include: {
+          property: {
+            select: {
+              id: true,
+              title: true,
+              images: true,
+              currentPrice: true,
+              status: true,
+            },
           },
         },
-      },
-    });
+      });
 
-    res.json(
-      ok(
-        bids.map((bid) => ({
-          id: bid.id,
-          amount: bid.amount,
-          createdAt: bid.createdAt.toISOString(),
-          status: bid.status,
-          property: bid.property,
-        })),
-      ),
-    );
+      res.json(
+        ok(
+          bids.map((bid) => ({
+            id: bid.id,
+            amount: bid.amount,
+            createdAt: bid.createdAt.toISOString(),
+            status: bid.status,
+            property: bid.property,
+          })),
+        ),
+      );
+    } catch (error) {
+      logger.error("get_me_bids_failed", error);
+      res.status(500).json(fail("Could not load bids"));
+    }
   });
 
   router.get("/me/favorites", requireAuth, async (req, res) => {
@@ -289,9 +294,13 @@ export function createMeRouter(deps: MeRouterDeps): Router {
   router.delete("/me/favorites/:propertyId", requireAuth, async (req, res) => {
     try {
       const user = (req as AuthedRequest).user;
-      await deps.prisma.favorite.deleteMany({
+      const removed = await deps.prisma.favorite.deleteMany({
         where: { userId: user.id, propertyId: String(req.params.propertyId) },
       });
+      if (removed.count === 0) {
+        res.status(404).json(fail("Favorite not found"));
+        return;
+      }
       res.json(ok({ removed: true }));
     } catch (error) {
       logger.error("delete_me_favorite_failed", error);
@@ -300,41 +309,54 @@ export function createMeRouter(deps: MeRouterDeps): Router {
   });
 
   router.get("/me/notifications", requireAuth, async (req, res) => {
-    const user = (req as AuthedRequest).user;
-    const rows = await deps.prisma.notification.findMany({
-      where: { userId: user.id },
-      orderBy: { createdAt: "desc" },
-      take: 50,
-    });
-    res.json(
-      ok(
-        rows.map((n) => ({
-          id: n.id,
-          type: n.type,
-          title: n.title,
-          body: n.body,
-          readAt: n.readAt?.toISOString() ?? null,
-          propertyId: n.propertyId,
-          createdAt: n.createdAt.toISOString(),
-        })),
-      ),
-    );
+    try {
+      const user = (req as AuthedRequest).user;
+      const rows = await deps.prisma.notification.findMany({
+        where: { userId: user.id },
+        orderBy: { createdAt: "desc" },
+        take: 50,
+      });
+      res.json(
+        ok(
+          rows.map((n) => ({
+            id: n.id,
+            type: n.type,
+            title: n.title,
+            body: n.body,
+            readAt: n.readAt?.toISOString() ?? null,
+            propertyId: n.propertyId,
+            createdAt: n.createdAt.toISOString(),
+          })),
+        ),
+      );
+    } catch (error) {
+      logger.error("get_me_notifications_failed", error);
+      res.status(500).json(fail("Could not load notifications"));
+    }
   });
 
   router.patch("/me/notifications/:id/read", requireAuth, async (req, res) => {
-    const user = (req as AuthedRequest).user;
-    const row = await deps.prisma.notification.findFirst({
-      where: { id: String(req.params.id), userId: user.id },
-    });
-    if (!row) {
-      res.status(404).json(fail("Not found"));
-      return;
+    try {
+      const user = (req as AuthedRequest).user;
+      const row = await deps.prisma.notification.findFirst({
+        where: { id: String(req.params.id), userId: user.id },
+      });
+      if (!row) {
+        res.status(404).json(fail("Not found"));
+        return;
+      }
+      await deps.prisma.notification.update({
+        where: { id: row.id },
+        data: { readAt: new Date() },
+      });
+      res.json(ok({ read: true }));
+    } catch (error) {
+      logger.error("mark_notification_read_failed", {
+        notificationId: String(req.params.id),
+        error,
+      });
+      res.status(500).json(fail("Could not update notification"));
     }
-    await deps.prisma.notification.update({
-      where: { id: row.id },
-      data: { readAt: new Date() },
-    });
-    res.json(ok({ read: true }));
   });
 
   return router;

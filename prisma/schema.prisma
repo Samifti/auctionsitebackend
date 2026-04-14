@@ -38,9 +38,11 @@ model User {
   id            String    @id @default(cuid())
   name          String
   email         String    @unique
+  phoneNumber   String    @unique
   passwordHash  String
   role          Role      @default(CUSTOMER)
   emailVerified Boolean   @default(false)
+  phoneVerified Boolean   @default(false)
   bids          Bid[]
   properties    Property[] @relation("PropertyCreator")
   favorites     Favorite[]
