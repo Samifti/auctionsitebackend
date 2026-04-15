@@ -16,7 +16,7 @@ import { generateOpaqueToken, hashOpaqueToken } from "@/lib/crypto-token";
 import { sendEmail } from "@/lib/email";
 import { signAccessToken } from "@/lib/jwt-tokens";
 import { logger } from "@/lib/logger";
-import { checkPhoneVerificationCode, sendPhoneVerificationCode, sendSmsMessage } from "@/lib/twilio-verify";
+import { checkPhoneVerificationCode, sendPhoneVerificationCode } from "@/lib/twilio-verify";
 import {
   consumeRefreshToken,
   createRefreshTokenRecord,
@@ -371,36 +371,36 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
         return;
       }
 
-      const code = generatePasswordResetOtpCode();
-      const codeHash = hashOpaqueToken(code);
-      const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+      if (parsed.data.channel === PasswordResetOtpChannel.EMAIL) {
+        const code = generatePasswordResetOtpCode();
+        const codeHash = hashOpaqueToken(code);
+        const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
-      await deps.prisma.passwordResetOtp.upsert({
-        where: {
-          userId_channel: {
+        await deps.prisma.passwordResetOtp.upsert({
+          where: {
+            userId_channel: {
+              userId: user.id,
+              channel: parsed.data.channel,
+            },
+          },
+          create: {
             userId: user.id,
             channel: parsed.data.channel,
+            codeHash,
+            expiresAt,
+            attemptCount: 0,
+            maxAttempts: 5,
+            consumedAt: null,
           },
-        },
-        create: {
-          userId: user.id,
-          channel: parsed.data.channel,
-          codeHash,
-          expiresAt,
-          attemptCount: 0,
-          maxAttempts: 5,
-          consumedAt: null,
-        },
-        update: {
-          codeHash,
-          expiresAt,
-          attemptCount: 0,
-          maxAttempts: 5,
-          consumedAt: null,
-        },
-      });
+          update: {
+            codeHash,
+            expiresAt,
+            attemptCount: 0,
+            maxAttempts: 5,
+            consumedAt: null,
+          },
+        });
 
-      if (parsed.data.channel === PasswordResetOtpChannel.EMAIL) {
         await sendEmail({
           to: user.email,
           subject: "Your Panic Auction password reset code",
@@ -408,10 +408,13 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
           text: `Your password reset OTP is ${code}. It expires in 10 minutes.`,
         }).catch((error) => logger.error("password_reset_otp_email_failed", error));
       } else {
-        await sendSmsMessage(
-          user.phoneNumber,
-          `Your Panic Auction password reset OTP is ${code}. It expires in 10 minutes.`,
-        ).catch((error) =>
+        await deps.prisma.passwordResetOtp.deleteMany({
+          where: {
+            userId: user.id,
+            channel: PasswordResetOtpChannel.SMS,
+          },
+        });
+        await sendPhoneVerificationCode(user.phoneNumber).catch((error) =>
           logger.error("password_reset_otp_sms_failed", {
             userId: user.id,
             phoneSuffix: user.phoneNumber.slice(-4),
@@ -447,6 +450,33 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
 
       if (!user) {
         res.status(400).json(fail("Invalid or expired OTP code"));
+        return;
+      }
+
+      if (parsed.data.channel === PasswordResetOtpChannel.SMS) {
+        const verifyResult = await checkPhoneVerificationCode(user.phoneNumber, parsed.data.code);
+        if (!verifyResult.valid) {
+          res.status(400).json(fail("Invalid or expired OTP code"));
+          return;
+        }
+
+        await deps.prisma.$transaction(async (transaction) => {
+          await transaction.user.update({
+            where: { id: user.id },
+            data: { passwordHash: await bcrypt.hash(parsed.data.newPassword, 10) },
+          });
+          await transaction.passwordResetOtp.deleteMany({
+            where: {
+              userId: user.id,
+              channel: PasswordResetOtpChannel.SMS,
+            },
+          });
+          await transaction.passwordResetToken.deleteMany({ where: { userId: user.id } });
+          await transaction.refreshToken.deleteMany({ where: { userId: user.id } });
+        });
+
+        clearAuthCookies(res);
+        res.json(ok({ reset: true }));
         return;
       }
 
