@@ -1,4 +1,6 @@
-import { Prisma, Role, type PrismaClient } from "@prisma/client";
+import { randomInt } from "crypto";
+
+import { PasswordResetOtpChannel, Prisma, Role, type PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import type { Router } from "express";
 import express from "express";
@@ -14,7 +16,7 @@ import { generateOpaqueToken, hashOpaqueToken } from "@/lib/crypto-token";
 import { sendEmail } from "@/lib/email";
 import { signAccessToken } from "@/lib/jwt-tokens";
 import { logger } from "@/lib/logger";
-import { checkPhoneVerificationCode, sendPhoneVerificationCode } from "@/lib/twilio-verify";
+import { checkPhoneVerificationCode, sendPhoneVerificationCode, sendSmsMessage } from "@/lib/twilio-verify";
 import {
   consumeRefreshToken,
   createRefreshTokenRecord,
@@ -30,6 +32,8 @@ import {
   logoutBodySchema,
   refreshBodySchema,
   registerSchema,
+  requestPasswordResetOtpSchema,
+  resetPasswordWithOtpSchema,
   sendPhoneOtpSchema,
   resetPasswordSchema,
   verifyPhoneOtpSchema,
@@ -58,6 +62,30 @@ function redactEmail(email: string): string {
   const domain = email.slice(at + 1);
   const prefix = local.length <= 1 ? local : `${local[0]}***`;
   return `${prefix}@${domain}`;
+}
+
+/** Validates and normalizes reset identifiers based on channel. */
+function normalizeResetIdentifier(
+  channel: PasswordResetOtpChannel,
+  identifierRaw: string,
+): { email?: string; phoneNumber?: string } | null {
+  const identifier = identifierRaw.trim();
+  if (channel === PasswordResetOtpChannel.EMAIL) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identifier)) {
+      return null;
+    }
+    return { email: identifier.toLowerCase() };
+  }
+
+  if (!/^\+[1-9]\d{7,14}$/.test(identifier)) {
+    return null;
+  }
+  return { phoneNumber: identifier };
+}
+
+/** Generates a 6-digit OTP code. */
+function generatePasswordResetOtpCode(): string {
+  return String(randomInt(100000, 1000000));
 }
 
 export function createAuthRouter(deps: AuthRouterDeps): Router {
@@ -316,6 +344,159 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
       res.json(ok({ reset: true }));
     } catch (error) {
       logger.error("reset_password_exception", error);
+      res.status(500).json(fail("Could not reset password"));
+    }
+  });
+
+  router.post("/request-password-reset-otp", async (req, res) => {
+    try {
+      const parsed = requestPasswordResetOtpSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json(fail("Invalid payload"));
+        return;
+      }
+
+      const normalized = normalizeResetIdentifier(parsed.data.channel, parsed.data.identifier);
+      if (!normalized) {
+        res.status(400).json(fail("Invalid identifier format"));
+        return;
+      }
+
+      const user = await deps.prisma.user.findFirst({
+        where: normalized.email ? { email: normalized.email } : { phoneNumber: normalized.phoneNumber },
+      });
+
+      if (!user) {
+        res.json(ok({ sent: true }));
+        return;
+      }
+
+      const code = generatePasswordResetOtpCode();
+      const codeHash = hashOpaqueToken(code);
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+      await deps.prisma.passwordResetOtp.upsert({
+        where: {
+          userId_channel: {
+            userId: user.id,
+            channel: parsed.data.channel,
+          },
+        },
+        create: {
+          userId: user.id,
+          channel: parsed.data.channel,
+          codeHash,
+          expiresAt,
+          attemptCount: 0,
+          maxAttempts: 5,
+          consumedAt: null,
+        },
+        update: {
+          codeHash,
+          expiresAt,
+          attemptCount: 0,
+          maxAttempts: 5,
+          consumedAt: null,
+        },
+      });
+
+      if (parsed.data.channel === PasswordResetOtpChannel.EMAIL) {
+        await sendEmail({
+          to: user.email,
+          subject: "Your Panic Auction password reset code",
+          html: `<p>Hi ${user.name},</p><p>Your password reset OTP is <strong>${code}</strong>.</p><p>It expires in 10 minutes. If you did not request this, ignore this message.</p>`,
+          text: `Your password reset OTP is ${code}. It expires in 10 minutes.`,
+        }).catch((error) => logger.error("password_reset_otp_email_failed", error));
+      } else {
+        await sendSmsMessage(
+          user.phoneNumber,
+          `Your Panic Auction password reset OTP is ${code}. It expires in 10 minutes.`,
+        ).catch((error) => logger.error("password_reset_otp_sms_failed", error));
+      }
+
+      res.json(ok({ sent: true }));
+    } catch (error) {
+      logger.error("request_password_reset_otp_exception", error);
+      res.status(500).json(fail("Could not process request"));
+    }
+  });
+
+  router.post("/reset-password-with-otp", async (req, res) => {
+    try {
+      const parsed = resetPasswordWithOtpSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json(fail("Invalid payload"));
+        return;
+      }
+
+      const normalized = normalizeResetIdentifier(parsed.data.channel, parsed.data.identifier);
+      if (!normalized) {
+        res.status(400).json(fail("Invalid identifier format"));
+        return;
+      }
+
+      const user = await deps.prisma.user.findFirst({
+        where: normalized.email ? { email: normalized.email } : { phoneNumber: normalized.phoneNumber },
+      });
+
+      if (!user) {
+        res.status(400).json(fail("Invalid or expired OTP code"));
+        return;
+      }
+
+      const otpRecord = await deps.prisma.passwordResetOtp.findUnique({
+        where: {
+          userId_channel: {
+            userId: user.id,
+            channel: parsed.data.channel,
+          },
+        },
+      });
+
+      if (!otpRecord || otpRecord.consumedAt || otpRecord.expiresAt < new Date()) {
+        res.status(400).json(fail("Invalid or expired OTP code"));
+        return;
+      }
+
+      if (otpRecord.attemptCount >= otpRecord.maxAttempts) {
+        res.status(400).json(fail("Too many invalid attempts. Request a new OTP."));
+        return;
+      }
+
+      const expectedHash = hashOpaqueToken(parsed.data.code);
+      if (expectedHash !== otpRecord.codeHash) {
+        const nextAttemptCount = otpRecord.attemptCount + 1;
+        await deps.prisma.passwordResetOtp.update({
+          where: { id: otpRecord.id },
+          data: { attemptCount: nextAttemptCount },
+        });
+
+        if (nextAttemptCount >= otpRecord.maxAttempts) {
+          res.status(400).json(fail("Too many invalid attempts. Request a new OTP."));
+          return;
+        }
+
+        res.status(400).json(fail("Invalid or expired OTP code"));
+        return;
+      }
+
+      await deps.prisma.$transaction(async (transaction) => {
+        await transaction.user.update({
+          where: { id: user.id },
+          data: { passwordHash: await bcrypt.hash(parsed.data.newPassword, 10) },
+        });
+        await transaction.passwordResetOtp.update({
+          where: { id: otpRecord.id },
+          data: { consumedAt: new Date() },
+        });
+        await transaction.passwordResetToken.deleteMany({ where: { userId: user.id } });
+        await transaction.refreshToken.deleteMany({ where: { userId: user.id } });
+      });
+
+      clearAuthCookies(res);
+      res.json(ok({ reset: true }));
+    } catch (error) {
+      logger.error("reset_password_with_otp_exception", error);
       res.status(500).json(fail("Could not reset password"));
     }
   });

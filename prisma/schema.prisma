@@ -34,6 +34,11 @@ enum NotificationType {
   GENERIC
 }
 
+enum PasswordResetOtpChannel {
+  EMAIL
+  SMS
+}
+
 model User {
   id            String    @id @default(cuid())
   name          String
@@ -49,6 +54,7 @@ model User {
   wonAuctions   Property[] @relation("AuctionWinner")
   refreshTokens            RefreshToken[]
   passwordResetTokens      PasswordResetToken[]
+  passwordResetOtps        PasswordResetOtp[]
   emailVerificationTokens  EmailVerificationToken[]
   notifications            Notification[]
   createdAt                DateTime  @default(now())
@@ -75,6 +81,24 @@ model PasswordResetToken {
   createdAt DateTime @default(now())
 
   @@index([userId])
+}
+
+model PasswordResetOtp {
+  id          String                  @id @default(cuid())
+  userId      String
+  user        User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channel     PasswordResetOtpChannel
+  codeHash    String
+  expiresAt   DateTime
+  attemptCount Int                    @default(0)
+  maxAttempts Int                     @default(5)
+  consumedAt  DateTime?
+  createdAt   DateTime                @default(now())
+  updatedAt   DateTime                @updatedAt
+
+  @@index([userId, channel])
+  @@index([expiresAt])
+  @@unique([userId, channel])
 }
 
 model EmailVerificationToken {

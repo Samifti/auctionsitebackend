@@ -69,3 +69,41 @@ export async function checkPhoneVerificationCode(
     valid: result.valid === true || result.status === "approved",
   };
 }
+
+/**
+ * Sends an SMS message using Twilio Messaging API.
+ * Requires TWILIO_PHONE_NUMBER in addition to Verify credentials.
+ */
+export async function sendSmsMessage(to: string, body: string): Promise<void> {
+  const { accountSid, authToken } = getTwilioConfig();
+  const from = (process.env.TWILIO_PHONE_NUMBER ?? "").trim();
+  if (!from) {
+    throw new Error("TWILIO_PHONE_NUMBER is required to send SMS messages");
+  }
+
+  const auth = Buffer.from(`${accountSid}:${authToken}`).toString("base64");
+  const url = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Basic ${auth}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({
+      To: to,
+      From: from,
+      Body: body,
+    }).toString(),
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    const message =
+      typeof data.message === "string" && data.message.length > 0 ? data.message : "Twilio SMS send failed";
+    throw new Error(message);
+  }
+
+  logger.info("twilio_sms_sent", {
+    phoneSuffix: to.slice(-4),
+  });
+}

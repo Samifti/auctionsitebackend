@@ -67,8 +67,24 @@ export const forgotPasswordSchema = z.object({
   email: z.string().email(),
 });
 
+export const passwordResetChannelSchema = z.enum(["EMAIL", "SMS"]);
+
+const otpCodeSchema = z.string().trim().regex(/^\d{6}$/, "OTP must be exactly 6 digits");
+
 export const resetPasswordSchema = z.object({
   token: z.string().min(10),
+  newPassword: z.string().min(8),
+});
+
+export const requestPasswordResetOtpSchema = z.object({
+  channel: passwordResetChannelSchema,
+  identifier: z.string().trim().min(3),
+});
+
+export const resetPasswordWithOtpSchema = z.object({
+  channel: passwordResetChannelSchema,
+  identifier: z.string().trim().min(3),
+  code: otpCodeSchema,
   newPassword: z.string().min(8),
 });
 

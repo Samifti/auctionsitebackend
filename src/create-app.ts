@@ -122,6 +122,8 @@ export function createApp(options: CreateAppOptions): express.Express {
   app.use("/api/auth/register", authStrictLimiter);
   app.use("/api/auth/forgot-password", authStrictLimiter);
   app.use("/api/auth/reset-password", authStrictLimiter);
+  app.use("/api/auth/request-password-reset-otp", otpStrictLimiter);
+  app.use("/api/auth/reset-password-with-otp", otpStrictLimiter);
   app.use("/api/auth/refresh", authStrictLimiter);
   app.use("/api/auth/verify-phone-otp", otpStrictLimiter);
   app.use("/api/auth/resend-phone-otp", otpStrictLimiter);
