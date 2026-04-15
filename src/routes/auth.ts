@@ -411,7 +411,13 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
         await sendSmsMessage(
           user.phoneNumber,
           `Your Panic Auction password reset OTP is ${code}. It expires in 10 minutes.`,
-        ).catch((error) => logger.error("password_reset_otp_sms_failed", error));
+        ).catch((error) =>
+          logger.error("password_reset_otp_sms_failed", {
+            userId: user.id,
+            phoneSuffix: user.phoneNumber.slice(-4),
+            reason: error instanceof Error ? error.message : String(error),
+          }),
+        );
       }
 
       res.json(ok({ sent: true }));

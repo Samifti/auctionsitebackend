@@ -18,12 +18,26 @@ import { registerHealthRoutes } from "@/routes/health";
 import { createMeRouter } from "@/routes/me";
 import { createPropertiesRouter } from "@/routes/properties";
 
+function normalizeOrigin(value: string): string | null {
+  const trimmed = value.trim().replace(/\/$/, "");
+  if (!trimmed) {
+    return null;
+  }
+
+  const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try {
+    return new URL(withProtocol).origin;
+  } catch {
+    return null;
+  }
+}
+
 function parseAllowedOrigins(): string[] {
-  const raw = process.env.CLIENT_URL ?? "http://localhost:3000";
+  const raw = process.env.CLIENT_URL ?? process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
   return raw
     .split(",")
-    .map((value) => value.trim())
-    .filter((value) => value.length > 0);
+    .map((value) => normalizeOrigin(value))
+    .filter((value): value is string => Boolean(value));
 }
 
 export type CreateAppOptions = {
@@ -46,11 +60,12 @@ export function createApp(options: CreateAppOptions): express.Express {
   app.use(
     cors({
       origin: (origin, callback) => {
-        if (!origin || allowedOrigins.includes(origin)) {
+        const normalizedRequestOrigin = origin ? normalizeOrigin(origin) : null;
+        if (!origin || (normalizedRequestOrigin && allowedOrigins.includes(normalizedRequestOrigin))) {
           callback(null, true);
           return;
         }
-        logger.warn("cors_request_blocked", { origin, allowedOrigins });
+        logger.warn("cors_request_blocked", { origin, normalizedRequestOrigin, allowedOrigins });
         callback(null, false);
       },
       credentials: true,
